@@ -246,6 +246,7 @@ body {
   }
   #photoDots {
     gap: 6px;
+    overflow: hidden;
   }
   #photoDots button {
     min-width: 44px;
@@ -787,6 +788,7 @@ let loadingTl = null;
 function startLoadingAnim() {
   stopLoadingAnim();
   const dots = document.querySelectorAll('#loadingDots div');
+  const label = document.getElementById('loadingLabel');
   loadingTl = gsap.timeline({ repeat: -1 });
   // Rings: staggered pulse
   loadingTl.fromTo('#ringOuter', { scale: 0.8, opacity: 0.3 }, { scale: 1.2, opacity: 0, duration: 1.2, ease: 'power1.out' }, 0);
@@ -981,8 +983,10 @@ function showPhoto(idx) {
 }
 
 function buildPhotoSlider(count) {
-  const pDots = document.getElementById('photoDots');
+  buildPhotoSliderIn(count, document.getElementById('photoDots'));
+}
 
+function buildPhotoSliderIn(count, container) {
   // Build dot markers
   let dotsHtml = '';
   for (let i = 0; i < count; i++) {
@@ -999,9 +1003,9 @@ function buildPhotoSlider(count) {
       >${innerHtml}</div>`;
   }
 
-  pDots.innerHTML = `
+  container.innerHTML = `
     <div class="relative flex items-center gap-3 w-full px-2">
-      <div class="relative flex-1 h-6 flex items-center">
+      <div class="relative flex-1 h-6 flex items-center overflow-hidden">
         <!-- Background track -->
         <div class="absolute w-full h-[3px] bg-black/5 rounded-full z-0"></div>
         <!-- Fill track - glowing stream -->
@@ -1038,6 +1042,7 @@ async function showLoadingLabel(type, count) {
   const textEl = document.getElementById('loadingLabelText');
   if (!label || !iconEl || !textEl) return;
 
+  // Build SVG icon by type
   let svgHtml = '';
   let labelText = '';
   if (type === 'live_photo') {
@@ -1060,13 +1065,14 @@ async function showLoadingLabel(type, count) {
   const tl = gsap.timeline();
   let extraTween = null;
 
-  // Shimmer: text gradient sweep + icon glow
+  // ─── Shimmer: text gradient sweep + icon glow ───
   const shimmerTl = gsap.timeline({ repeat: -1 });
   shimmerTl.fromTo(textEl,
     { backgroundPosition: '100% center' },
     { backgroundPosition: '-100% center', duration: 1.6, ease: 'power1.inOut' }
   );
   shimmerTl.to(textEl, { backgroundPosition: '100% center', duration: 0, ease: 'none' });
+  // Icon glow synced with shimmer peak
   shimmerTl.fromTo(iconEl.querySelector('svg'),
     { filter: 'drop-shadow(0 0 0px transparent)' },
     { filter: 'drop-shadow(0 0 8px rgba(180,160,255,1)) drop-shadow(0 0 16px rgba(140,200,255,0.7))', duration: 0.6, ease: 'power2.in' },
@@ -1102,6 +1108,7 @@ async function showLoadingLabel(type, count) {
     tl.to([back, front, dot], { scale: 1.1, opacity: 0.6, duration: 0.35, ease: 'power2.inOut', yoyo: true, repeat: 2 }, 0.6);
   }
 
+  // Label bounce (same for all types)
   tl.fromTo(label, { y: 4, opacity: 0 }, { y: -8, opacity: 0.6, duration: 0.35, ease: 'power2.out' }, 0);
   tl.to(label, { y: 0, opacity: 0.35, duration: 0.3, ease: 'power2.inOut' }, 0.35);
   tl.to(label, { y: -6, opacity: 0.6, duration: 0.3, ease: 'power2.out' }, 0.65);
@@ -1221,10 +1228,19 @@ function buildResult(data) {
     let ds = '';
     currentLivePhotos.forEach((_, i) => { ds += `<button onclick="showLivePhoto(${i})" class="w-2 h-2 rounded-full ${i===0?'bg-black/40':'bg-black/10'}"></button>`; });
     if (currentImages.length > 0) {
-      ds += `<span class="mx-1">|</span>`;
-      currentImages.forEach((_, i) => { ds += `<button onclick="showPhoto(${i})" class="w-2 h-2 rounded-full bg-black/10"></button>`; });
+      if (currentImages.length >= 3) {
+        // Live photo dots + separator + image slider
+        ds += `<span class="mx-1">|</span>`;
+        pDots.innerHTML = `<div class="flex items-center justify-center gap-2 mb-2">${ds}</div><div id="imageSliderWrap" class="w-full"></div>`;
+        buildPhotoSliderIn(currentImages.length, document.getElementById('imageSliderWrap'));
+      } else {
+        ds += `<span class="mx-1">|</span>`;
+        currentImages.forEach((_, i) => { ds += `<button onclick="showPhoto(${i})" class="w-2 h-2 rounded-full bg-black/10"></button>`; });
+        pDots.innerHTML = ds;
+      }
+    } else {
+      pDots.innerHTML = ds;
     }
-    pDots.innerHTML = ds;
     pDots.classList.remove('hidden');
 
     const totalItems = currentLivePhotos.length + currentImages.length;

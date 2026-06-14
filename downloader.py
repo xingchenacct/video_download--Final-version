@@ -141,7 +141,7 @@ def _extract_images_with_playwright(share_url: str) -> tuple[list[str], list[str
         page = browser.new_page()
         page.goto(share_url, wait_until='domcontentloaded', timeout=15000)
 
-        # Wait for images to stabilize (lazy-loaded), poll every 400ms, max 5.2s
+        # Wait for images to stabilize (lazy-loaded), poll every 400ms, max 5s
         prev_count = 0
         stable_rounds = 0
         for _ in range(13):
@@ -233,30 +233,29 @@ def _extract_images_with_playwright(share_url: str) -> tuple[list[str], list[str
 
 
 def _extract_with_playwright_async(share_url: str) -> tuple[list[str], list[str]]:
-    """Run sync Playwright in executor to avoid asyncio loop conflicts in FastAPI."""
-    import asyncio
-    import concurrent.futures
-
+    """Async version of Playwright extraction for use in FastAPI."""
     try:
-        from playwright.sync_api import sync_playwright
+        from playwright.async_api import async_playwright
     except ImportError:
         return [], []
 
-    def _extract():
+    import asyncio
+
+    async def _extract():
         video_urls = []
         images = []
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto(share_url, wait_until='domcontentloaded', timeout=15000)
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.goto(share_url, wait_until='domcontentloaded', timeout=15000)
 
-            # Wait for images to stabilize (lazy-loaded), poll every 400ms, max 5.2s
+            # Wait for images to stabilize (lazy-loaded), poll every 400ms, max 5s
             prev_count = 0
             stable_rounds = 0
-            for _ in range(13):
+            for _ in range(13):  # 13 * 400ms = 5.2s max
                 try:
-                    count = page.evaluate('''() => {
+                    count = await page.evaluate('''() => {
                         let n = 0;
                         document.querySelectorAll('img').forEach(el => {
                             const src = el.src || '';
@@ -266,23 +265,23 @@ def _extract_with_playwright_async(share_url: str) -> tuple[list[str], list[str]
                         return n;
                     }''')
                 except Exception:
-                    page.wait_for_timeout(400)
+                    await page.wait_for_timeout(400)
                     continue
                 if count != prev_count:
                     stable_rounds = 0
                     prev_count = count
-                    page.wait_for_timeout(400)
+                    await page.wait_for_timeout(400)
                     continue
                 stable_rounds += 1
                 if count > 0 and stable_rounds >= 4:
                     break
                 if count == 0 and stable_rounds >= 6:
                     break
-                page.wait_for_timeout(400)
+                await page.wait_for_timeout(400)
 
             # Wait for video elements to appear (they load after images)
-            for _ in range(8):
-                has_video = page.evaluate('''() => {
+            for _ in range(8):  # 8 * 400ms = 3.2s max
+                has_video = await page.evaluate('''() => {
                     let found = false;
                     document.querySelectorAll('video source').forEach(el => {
                         const src = el.src || el.getAttribute('src') || '';
@@ -292,10 +291,10 @@ def _extract_with_playwright_async(share_url: str) -> tuple[list[str], list[str]
                 }''')
                 if has_video:
                     break
-                page.wait_for_timeout(400)
+                await page.wait_for_timeout(400)
 
             # Batch extract via JS - container scoped + filters + dedup by ID
-            all_data = page.evaluate('''() => {
+            all_data = await page.evaluate('''() => {
                 const videos = [];
                 const seenPaths = new Set();
                 document.querySelectorAll('video source').forEach(el => {
@@ -334,22 +333,16 @@ def _extract_with_playwright_async(share_url: str) -> tuple[list[str], list[str]
             }''')
             video_urls = all_data.get('videos', [])
             images = all_data.get('images', [])
-            browser.close()
+
+            await browser.close()
 
         return video_urls, images
 
-    # Run in thread to avoid asyncio loop conflict
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(_extract)
-            return future.result(timeout=30)
-    else:
-        return _extract()
+    # Run in a new thread to avoid asyncio conflicts
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(asyncio.run, _extract())
+        return future.result(timeout=120)
 
 
 def _extract_douyin(url: str) -> dict:
@@ -390,7 +383,6 @@ def _extract_douyin(url: str) -> dict:
         music_url = json.loads('"' + music_match.group(1) + '"')
 
     if content_type == "note":
-        video_url = ""
         # Extract all images from photo note (use bracket counting for nested JSON)
         images = []
         img_start = html.find('"images":[')
@@ -426,9 +418,8 @@ def _extract_douyin(url: str) -> dict:
         # Skip for pure photo posts to avoid 8s+ delay
         # Live photos have img_bitrate=null, pure photos have img_bitrate=[...]
         has_video_hint = '"img_bitrate":null' in html
-        # Trigger if: no video found AND (video hint OR no images extracted OR small page)
         # Do NOT use len(images) <= 1 — single-image posts are valid and don't need Playwright
-        if not video_url and (has_video_hint or len(images) == 0 or len(html) < 10000):
+        if (has_video_hint or len(images) == 0 or len(html) < 10000):
             try:
                 pw_videos, pw_images = _extract_with_playwright_async(share_url)
                 if pw_images:
@@ -998,7 +989,7 @@ def _download_live_photos(info: dict) -> tuple[str, str]:
         raise ValueError("未找到动图视频")
 
     safe_title = re.sub(r'[\n\r\t\\/*?:"<>|#]', '', info["title"])[:50] or uuid.uuid4().hex[:12]
-    headers = {"User-Agent": MOBILE_UA}
+    headers = {"User-Agent": MOBILE_UA, "Referer": "https://www.douyin.com/"}
 
     # Download each video clip, filter out invalid ones
     vid_paths = []
@@ -1026,7 +1017,13 @@ def _download_live_photos(info: dict) -> tuple[str, str]:
             f.write(f"file '{os.path.abspath(v)}'\n")
 
     out_path = str(DOWNLOADS_DIR / f"{safe_title}.mp4")
-    cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file, "-c", "copy", out_path]
+    # Re-encode to ensure compatible format (clips may differ in codec/resolution/fps)
+    cmd = [
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_file,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart",
+        out_path,
+    ]
     result = subprocess.run(cmd, capture_output=True)
 
     # Cleanup temp files
