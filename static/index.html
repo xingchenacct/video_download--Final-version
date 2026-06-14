@@ -246,7 +246,6 @@ body {
   }
   #photoDots {
     gap: 6px;
-    overflow: hidden;
   }
   #photoDots button {
     min-width: 44px;
@@ -263,14 +262,23 @@ body {
   #progressWrap {
     margin-top: 8px;
   }
-  /* Photo slider mobile */
+  /* Photo slider mobile — scale down proportionally */
   input[type="range"] {
-    height: 44px;
+    height: 40px;
   }
   .slider-dot {
-    width: 44px !important;
-    height: 44px !important;
-    margin-left: -22px !important;
+    width: 12px !important;
+    height: 12px !important;
+    margin-left: -6px !important;
+  }
+  .slider-dot.slider-dot-active-glow {
+    width: 30px !important;
+    height: 21px !important;
+    margin-left: -15px !important;
+  }
+  /* Slider track container: taller to fit scaled dots */
+  #photoDots .flex-1.h-6 {
+    height: 24px;
   }
 }
 
@@ -1005,7 +1013,7 @@ function buildPhotoSliderIn(count, container) {
 
   container.innerHTML = `
     <div class="relative flex items-center gap-3 w-full px-2">
-      <div class="relative flex-1 h-6 flex items-center overflow-hidden">
+      <div class="relative flex-1 h-6 flex items-center">
         <!-- Background track -->
         <div class="absolute w-full h-[3px] bg-black/5 rounded-full z-0"></div>
         <!-- Fill track - glowing stream -->
